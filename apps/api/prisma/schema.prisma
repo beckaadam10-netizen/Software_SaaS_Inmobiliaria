@@ -1,0 +1,1378 @@
+// Esquema base de Soft_Inmo.
+// Regla: toda tabla de empresa lleva tenantId. Al agregar un modelo de empresa,
+// regístralo también en TENANT_MODELS (src/prisma/tenant-scope.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  AGENT
+  ACCOUNTANT
+  OWNER
+}
+
+// ---------- Plataforma (sin tenantId) ----------
+
+model Plan {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  priceMonthly Decimal  @db.Decimal(10, 2)
+  currency     String   @default("BOB") @db.VarChar(3)
+  // Límites numéricos: { "agents": 5, "properties": 150, "contacts": 1000, "storageGb": 10 }
+  limits       Json
+  // Módulos y funciones habilitadas: ["crm", "marketing", "matching", ...]
+  features     Json
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenants       Tenant[]
+  subscriptions Subscription[]
+}
+
+model Tenant {
+  id        String       @id @default(cuid())
+  slug      String       @unique @db.VarChar(63)
+  name      String
+  status    TenantStatus @default(ACTIVE)
+  planId    String
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  plan          Plan           @relation(fields: [planId], references: [id])
+  phone     String?      @db.VarChar(30)
+  email     String?
+  address   String?
+  about     String?      @db.Text
+  // --- Marca (White Label) ---
+  logoFile     String?
+  primaryColor String?  @db.VarChar(7)
+  buttonColor  String?  @db.VarChar(7)
+  whatsapp     String?  @db.VarChar(30)
+  website      String?
+  facebook     String?
+  instagram    String?
+  tiktok       String?
+  schedule     String?
+  legalName    String?
+  taxId        String?  @db.VarChar(30)
+  // Oculta "Funciona con Soft_Inmo" (solo con la función white_label del plan).
+  hideBrand    Boolean  @default(false)
+  domains      TenantDomain[]
+
+  users         User[]
+  subscriptions Subscription[]
+  auditLogs     AuditLog[]
+  contacts      Contact[]
+  properties    Property[]
+  leads         Lead[]
+  visits        Visit[]
+  cases         CommercialCase[]
+
+  @@index([planId])
+}
+
+// ---------- Empresa (con tenantId) ----------
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  tenantId           String
+  planId             String
+  status             SubscriptionStatus @default(TRIAL)
+  billingCycle       BillingCycle       @default(MONTHLY)
+  extraAgents        Int                @default(0)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@index([tenantId])
+  @@index([planId])
+}
+
+model User {
+  id           String    @id @default(cuid())
+  // null solo para usuarios SUPERADMIN de la plataforma
+  tenantId     String?
+  email        String
+  passwordHash String
+  fullName     String
+  role         UserRole
+  isActive     Boolean   @default(true)
+  phone        String?   @db.VarChar(30)
+  lastLoginAt  DateTime?
+  // Solo para el rol OWNER: el contacto propietario al que pertenece esta cuenta.
+  contactId    String?
+  // Sucursal del usuario. Propiedades, clientes y operaciones pertenecen a la sucursal de su agente.
+  branchId     String?
+  // Permisos puntuales que cambian lo que trae el rol: { "view_all": true, ... }
+  permissions  Json?
+  // Foto de perfil (archivo en uploads/<empresa>/avatars). Se muestra en el portal junto a las propiedades del agente.
+  avatarFile   String?   @db.VarChar(60)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant     Tenant?          @relation(fields: [tenantId], references: [id])
+  auditLogs  AuditLog[]
+  properties Property[]
+  contacts   Contact[]
+  leads      Lead[]
+  visits     Visit[]
+  cases      CommercialCase[]
+  activities Activity[]
+  documents     Document[]
+  notifications Notification[]
+  commissions   Commission[]
+  settlements   Settlement[]
+  payables      Payable[]
+  contact       Contact?      @relation("OwnerAccount", fields: [contactId], references: [id])
+  branch        Branch?       @relation(fields: [branchId], references: [id])
+  tasks         Task[]
+
+  @@unique([tenantId, email])
+  @@index([email])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String?
+  action    String   @db.VarChar(100)
+  entity    String   @db.VarChar(100)
+  entityId  String?
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([entity, entityId])
+}
+
+// ---------- CRM ----------
+
+enum ContactType {
+  PROSPECT
+  BUYER
+  TENANT
+  OWNER
+  INVESTOR
+  COMPANY
+}
+
+enum OperationType {
+  SALE
+  RENT
+  ANTICRETICO
+}
+
+enum PropertyType {
+  HOUSE
+  APARTMENT
+  LAND
+  OFFICE
+  COMMERCIAL
+  WAREHOUSE
+  OTHER
+}
+
+model Contact {
+  id              String         @id @default(cuid())
+  tenantId        String
+  type            ContactType    @default(PROSPECT)
+  fullName        String
+  email           String?
+  phone           String?        @db.VarChar(30)
+  notes           String?        @db.Text
+  // Preferencias de búsqueda (para matching en Fase 2)
+  prefOperation   OperationType?
+  prefType        PropertyType?
+  prefZone        String?
+  prefBudgetMax   Decimal?       @db.Decimal(14, 2)
+  prefCurrency    String?        @db.VarChar(3)
+  prefBedrooms    Int?
+  assignedAgentId String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  assignedAgent   User?            @relation(fields: [assignedAgentId], references: [id])
+  ownedProperties Property[]
+  leads           Lead[]
+  visits          Visit[]
+  casesAsOwner    CommercialCase[] @relation("CaseOwner")
+  casesAsClient   CommercialCase[] @relation("CaseClient")
+  offers          Offer[]
+  reservations    Reservation[]
+  receivables     Receivable[]
+  ownerAccounts   User[]           @relation("OwnerAccount")
+
+  @@index([tenantId, type])
+  @@index([tenantId, assignedAgentId])
+  @@index([tenantId, phone])
+}
+
+// ---------- Propiedades ----------
+
+enum PropertyStatus {
+  AVAILABLE
+  RESERVED
+  NEGOTIATING
+  SOLD
+  RENTED
+  INACTIVE
+}
+
+model Property {
+  id          String         @id @default(cuid())
+  tenantId    String
+  code        String         @db.VarChar(20)
+  title       String
+  type        PropertyType
+  operation   OperationType
+  status      PropertyStatus @default(AVAILABLE)
+  isPublished Boolean        @default(false)
+  price       Decimal        @db.Decimal(14, 2)
+  currency    String         @default("USD") @db.VarChar(3)
+  address     String?
+  zone        String?
+  city        String?
+  latitude    Float?
+  longitude   Float?
+  areaM2      Float?
+  builtM2     Float?
+  bedrooms    Int?
+  bathrooms   Int?
+  parking     Int?
+  floor       Int?
+  yearBuilt   Int?
+  description String?        @db.Text
+  features    Json?
+  viewCount   Int            @default(0)
+  ownerId     String?
+  agentId     String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id])
+  owner        Contact?               @relation(fields: [ownerId], references: [id])
+  agent        User?                  @relation(fields: [agentId], references: [id])
+  images       PropertyImage[]
+  priceHistory PropertyPriceHistory[]
+  leads        Lead[]
+  visits       Visit[]
+  cases        CommercialCase[]
+  favorites    Favorite[]
+  stats        PropertyStat[]
+  publications Publication[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@index([tenantId, agentId])
+  @@index([tenantId, isPublished])
+}
+
+model PropertyImage {
+  id         String   @id @default(cuid())
+  tenantId   String
+  propertyId String
+  fileName   String
+  mimeType   String   @db.VarChar(50)
+  sizeBytes  Int
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+model PropertyPriceHistory {
+  id         String   @id @default(cuid())
+  tenantId   String
+  propertyId String
+  price      Decimal  @db.Decimal(14, 2)
+  currency   String   @db.VarChar(3)
+  createdAt  DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+// ---------- Leads y visitas ----------
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  INTERESTED
+  VISIT
+  NEGOTIATION
+  RESERVED
+  CLOSED
+  LOST
+}
+
+enum LeadSource {
+  WEB
+  WHATSAPP
+  CALL
+  REFERRAL
+  SOCIAL
+  QR
+  WALK_IN
+  OTHER
+}
+
+model Lead {
+  id         String     @id @default(cuid())
+  tenantId   String
+  contactId  String
+  propertyId String?
+  agentId    String?
+  caseId     String?
+  status     LeadStatus @default(NEW)
+  source     LeadSource @default(OTHER)
+  score      Int        @default(0)
+  message    String?    @db.Text
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  contact  Contact         @relation(fields: [contactId], references: [id])
+  property Property?       @relation(fields: [propertyId], references: [id])
+  agent    User?           @relation(fields: [agentId], references: [id])
+  case     CommercialCase? @relation(fields: [caseId], references: [id])
+  visits   Visit[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, agentId])
+  @@index([tenantId, propertyId])
+}
+
+enum VisitStatus {
+  REQUESTED
+  CONFIRMED
+  RESCHEDULED
+  DONE
+  CANCELLED
+  NO_SHOW
+}
+
+model Visit {
+  id          String      @id @default(cuid())
+  tenantId    String
+  propertyId  String
+  contactId   String
+  agentId     String?
+  leadId      String?
+  caseId      String?
+  scheduledAt DateTime
+  status      VisitStatus @default(REQUESTED)
+  notes       String?     @db.Text
+  result      String?     @db.Text
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  property Property        @relation(fields: [propertyId], references: [id])
+  contact  Contact         @relation(fields: [contactId], references: [id])
+  agent    User?           @relation(fields: [agentId], references: [id])
+  lead     Lead?           @relation(fields: [leadId], references: [id])
+  case     CommercialCase? @relation(fields: [caseId], references: [id])
+
+  @@index([tenantId, scheduledAt])
+  @@index([tenantId, agentId])
+  @@index([tenantId, propertyId])
+}
+
+// ---------- Gestión comercial: expediente y 8 pasos ----------
+
+enum CaseStage {
+  CAPTATION
+  MARKETING
+  LEADS
+  VISIT
+  FOLLOW_UP
+  NEGOTIATION
+  LEGAL
+  POST_SALE
+}
+
+enum CaseStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum StageStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+model CommercialCase {
+  id            String        @id @default(cuid())
+  tenantId      String
+  code          String        @db.VarChar(20)
+  propertyId    String
+  ownerId       String?
+  clientId      String?
+  agentId       String?
+  operation     OperationType
+  price         Decimal       @db.Decimal(14, 2)
+  currency      String        @default("USD") @db.VarChar(3)
+  currentStage  CaseStage     @default(CAPTATION)
+  status        CaseStatus    @default(OPEN)
+  isExclusive   Boolean       @default(false)
+  commissionPct Decimal?      @db.Decimal(5, 2)
+  captationEnds DateTime?
+  closedPrice   Decimal?      @db.Decimal(14, 2)
+  lostReason    String?
+  closedAt      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id])
+  property Property          @relation(fields: [propertyId], references: [id])
+  owner    Contact?          @relation("CaseOwner", fields: [ownerId], references: [id])
+  client   Contact?          @relation("CaseClient", fields: [clientId], references: [id])
+  agent    User?             @relation(fields: [agentId], references: [id])
+  stages   CommercialStage[]
+  leads    Lead[]
+  visits   Visit[]
+  offers       Offer[]
+  reservations Reservation[]
+  referrals    Referral[]
+  postSale     PostSale?
+  commission   Commission?
+  transactions Transaction[]
+  receivables  Receivable[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status, currentStage])
+  @@index([tenantId, agentId])
+  @@index([tenantId, propertyId])
+}
+
+model CommercialStage {
+  id          String      @id @default(cuid())
+  tenantId    String
+  caseId      String
+  stage       CaseStage
+  status      StageStatus @default(PENDING)
+  notes       String?     @db.Text
+  completedAt DateTime?
+  updatedAt   DateTime    @updatedAt
+
+  case CommercialCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, stage])
+  @@index([tenantId, caseId])
+}
+
+// ---------- Timeline ----------
+
+model Activity {
+  id          String   @id @default(cuid())
+  tenantId    String
+  entityType  String   @db.VarChar(30)
+  entityId    String
+  caseId      String?
+  userId      String?
+  description String   @db.VarChar(500)
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, caseId])
+}
+
+// ====================== FASE 2 ======================
+
+// ---------- Negociación ----------
+
+enum OfferKind {
+  OFFER
+  COUNTER
+}
+
+enum OfferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+// Toda oferta se conserva: nunca se borra, solo cambia de estado.
+model Offer {
+  id          String      @id @default(cuid())
+  tenantId    String
+  caseId      String
+  contactId   String
+  kind        OfferKind   @default(OFFER)
+  amount      Decimal     @db.Decimal(14, 2)
+  currency    String      @db.VarChar(3)
+  conditions  String?     @db.Text
+  status      OfferStatus @default(PENDING)
+  createdById String?
+  decidedAt   DateTime?
+  createdAt   DateTime    @default(now())
+
+  case    CommercialCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  contact Contact        @relation(fields: [contactId], references: [id])
+
+  @@index([tenantId, caseId])
+}
+
+enum ReservationStatus {
+  ACTIVE
+  CANCELLED
+  APPLIED
+}
+
+model Reservation {
+  id        String            @id @default(cuid())
+  tenantId  String
+  caseId    String
+  contactId String
+  amount    Decimal           @db.Decimal(14, 2)
+  currency  String            @db.VarChar(3)
+  paidAt    DateTime
+  expiresAt DateTime?
+  status    ReservationStatus @default(ACTIVE)
+  notes     String?           @db.Text
+  createdAt DateTime          @default(now())
+
+  case    CommercialCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  contact Contact        @relation(fields: [contactId], references: [id])
+
+  @@index([tenantId, caseId])
+}
+
+// ---------- Documentos (siempre privados) ----------
+
+enum DocumentCategory {
+  TITLE
+  CONTRACT
+  ID
+  AUTHORIZATION
+  RECEIPT
+  PLAN
+  OTHER
+}
+
+model Document {
+  id           String           @id @default(cuid())
+  tenantId     String
+  entityType   String           @db.VarChar(20)
+  entityId     String
+  caseId       String?
+  category     DocumentCategory @default(OTHER)
+  name         String
+  fileName     String
+  mimeType     String           @db.VarChar(100)
+  sizeBytes    Int
+  uploadedById String?
+  createdAt    DateTime         @default(now())
+
+  uploadedBy User? @relation(fields: [uploadedById], references: [id])
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, caseId])
+}
+
+// ---------- Postventa y referidos ----------
+
+model PostSale {
+  id                String    @id @default(cuid())
+  tenantId          String
+  caseId            String    @unique
+  deliveredAt       DateTime?
+  satisfaction      Int?
+  testimonial       String?   @db.Text
+  testimonialPublic Boolean   @default(false)
+  notes             String?   @db.Text
+  // Reseña por enlace: el agente envía /resena/<token> y el cliente la escribe una sola vez.
+  reviewToken       String?   @unique @db.VarChar(64)
+  reviewRequestedAt DateTime?
+  reviewedAt        DateTime?
+  // El administrador puede ocultar una reseña publicada sin borrarla.
+  reviewHidden      Boolean   @default(false)
+  updatedAt         DateTime  @updatedAt
+
+  case CommercialCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+enum ReferralStatus {
+  NEW
+  CONTACTED
+  CONVERTED
+  DISCARDED
+}
+
+model Referral {
+  id        String         @id @default(cuid())
+  tenantId  String
+  caseId    String
+  fullName  String
+  phone     String?        @db.VarChar(30)
+  notes     String?        @db.Text
+  status    ReferralStatus @default(NEW)
+  contactId String?
+  leadId    String?
+  createdAt DateTime       @default(now())
+
+  case CommercialCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, caseId])
+}
+
+// ---------- Favoritos y estadísticas de la publicación ----------
+
+model Favorite {
+  id         String   @id @default(cuid())
+  tenantId   String
+  propertyId String
+  // Identificador anónimo del navegador del visitante; no es un dato personal.
+  visitorId  String   @db.VarChar(40)
+  createdAt  DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([propertyId, visitorId])
+  @@index([tenantId, propertyId])
+}
+
+enum TrafficSource {
+  DIRECT
+  QR
+  WHATSAPP
+  FACEBOOK
+  INSTAGRAM
+  TIKTOK
+  OTHER
+}
+
+// Visualizaciones agregadas por día y fuente. Nunca se guarda quién visitó.
+model PropertyStat {
+  id         String        @id @default(cuid())
+  tenantId   String
+  propertyId String
+  day        String        @db.VarChar(10)
+  source     TrafficSource
+  views      Int           @default(0)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([propertyId, day, source])
+  @@index([tenantId, day])
+}
+
+// ---------- Marketing ----------
+
+enum MarketingChannel {
+  PORTAL
+  FACEBOOK
+  INSTAGRAM
+  TIKTOK
+  WHATSAPP
+  EXTERNAL_PORTAL
+  PRINT
+  OTHER
+}
+
+model Publication {
+  id          String           @id @default(cuid())
+  tenantId    String
+  propertyId  String
+  channel     MarketingChannel
+  url         String?          @db.VarChar(500)
+  notes       String?          @db.Text
+  publishedAt DateTime         @default(now())
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+enum CampaignStatus {
+  PLANNED
+  ACTIVE
+  FINISHED
+}
+
+model Campaign {
+  id        String           @id @default(cuid())
+  tenantId  String
+  name      String
+  channel   MarketingChannel
+  budget    Decimal?         @db.Decimal(12, 2)
+  currency  String           @default("BOB") @db.VarChar(3)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  status    CampaignStatus   @default(PLANNED)
+  notes     String?          @db.Text
+  createdAt DateTime         @default(now())
+
+  @@index([tenantId, status])
+}
+
+// ---------- WhatsApp: plantillas de mensaje ----------
+
+model MessageTemplate {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+// ---------- Notificaciones ----------
+
+model Notification {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  type      String    @db.VarChar(30)
+  title     String
+  body      String?   @db.VarChar(500)
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, readAt])
+}
+
+// ====================== FASE 3: FINANZAS ======================
+// Finanzas de cada inmobiliaria. No tiene relación con la facturación SaaS de Soft_Inmo
+// (Plan, Subscription), que vive aparte y nunca se mezcla con estos datos.
+
+enum TransactionKind {
+  INCOME
+  EXPENSE
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  QR
+  CHECK
+  CARD
+  OTHER
+}
+
+// Dinero que efectivamente entró o salió. No se borra: se anula dejando el motivo.
+model Transaction {
+  id           String          @id @default(cuid())
+  tenantId     String
+  kind         TransactionKind
+  category     String          @db.VarChar(30)
+  amount       Decimal         @db.Decimal(14, 2)
+  currency     String          @db.VarChar(3)
+  date         DateTime
+  description  String
+  method       PaymentMethod   @default(TRANSFER)
+  caseId       String?
+  agentId      String?
+  receivableId String?
+  payableId    String?
+  createdById  String?
+  voidedAt     DateTime?
+  voidReason   String?
+  createdAt    DateTime        @default(now())
+
+  case       CommercialCase? @relation(fields: [caseId], references: [id])
+  receivable Receivable?     @relation(fields: [receivableId], references: [id])
+  payable    Payable?        @relation(fields: [payableId], references: [id])
+
+  @@index([tenantId, date])
+  @@index([tenantId, kind, category])
+  @@index([tenantId, caseId])
+}
+
+enum AccountStatus {
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+model Receivable {
+  id         String        @id @default(cuid())
+  tenantId   String
+  contactId  String?
+  caseId     String?
+  concept    String
+  category   String        @default("OTHER") @db.VarChar(30)
+  amount     Decimal       @db.Decimal(14, 2)
+  paidAmount Decimal       @default(0) @db.Decimal(14, 2)
+  currency   String        @db.VarChar(3)
+  dueDate    DateTime
+  status     AccountStatus @default(PENDING)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  contact  Contact?        @relation(fields: [contactId], references: [id])
+  case     CommercialCase? @relation(fields: [caseId], references: [id])
+  payments Transaction[]
+
+  @@index([tenantId, status, dueDate])
+}
+
+model Payable {
+  id           String        @id @default(cuid())
+  tenantId     String
+  agentId      String?
+  supplier     String?
+  concept      String
+  category     String        @default("OTHER") @db.VarChar(30)
+  amount       Decimal       @db.Decimal(14, 2)
+  paidAmount   Decimal       @default(0) @db.Decimal(14, 2)
+  currency     String        @db.VarChar(3)
+  dueDate      DateTime
+  status       AccountStatus @default(PENDING)
+  settlementId String?       @unique
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  agent      User?         @relation(fields: [agentId], references: [id])
+  settlement Settlement?   @relation(fields: [settlementId], references: [id])
+  payments   Transaction[]
+
+  @@index([tenantId, status, dueDate])
+}
+
+// ---------- Comisiones ----------
+
+enum CommissionBasis {
+  PERCENT
+  FIXED
+}
+
+// Regla configurable. Gana la más específica: agente + operación, luego agente, luego operación, luego general.
+model CommissionRule {
+  id            String          @id @default(cuid())
+  tenantId      String
+  name          String
+  operation     OperationType?
+  agentId       String?
+  basis         CommissionBasis @default(PERCENT)
+  // Comisión que cobra la empresa: porcentaje del precio de cierre o monto fijo.
+  companyValue  Decimal         @db.Decimal(14, 2)
+  currency      String?         @db.VarChar(3)
+  // Parte de esa comisión que corresponde al agente.
+  agentSharePct Decimal         @db.Decimal(5, 2)
+  // Comisión por nivel: [{ from, agentSharePct }]. El agente sube de nivel según lo vendido en el periodo.
+  tiers         Json?
+  tierPeriod    String?         @db.VarChar(5)
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([tenantId, isActive])
+}
+
+enum CommissionStatus {
+  GENERATED
+  PENDING
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+model Commission {
+  id            String           @id @default(cuid())
+  tenantId      String
+  caseId        String           @unique
+  agentId       String?
+  baseAmount    Decimal          @db.Decimal(14, 2)
+  currency      String           @db.VarChar(3)
+  companyAmount Decimal          @db.Decimal(14, 2)
+  agentAmount   Decimal          @db.Decimal(14, 2)
+  agentSharePct Decimal          @db.Decimal(5, 2)
+  ruleName      String?
+  status        CommissionStatus @default(GENERATED)
+  settlementId  String?
+  approvedAt    DateTime?
+  paidAt        DateTime?
+  notes         String?          @db.Text
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  case       CommercialCase @relation(fields: [caseId], references: [id])
+  agent      User?          @relation(fields: [agentId], references: [id])
+  settlement Settlement?    @relation(fields: [settlementId], references: [id])
+
+  @@index([tenantId, status])
+  @@index([tenantId, agentId])
+}
+
+// ---------- Liquidaciones ----------
+
+enum SettlementStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+model Settlement {
+  id               String           @id @default(cuid())
+  tenantId         String
+  code             String           @db.VarChar(20)
+  agentId          String
+  periodStart      DateTime
+  periodEnd        DateTime
+  currency         String           @db.VarChar(3)
+  commissionsTotal Decimal          @default(0) @db.Decimal(14, 2)
+  bonuses          Decimal          @default(0) @db.Decimal(14, 2)
+  deductions       Decimal          @default(0) @db.Decimal(14, 2)
+  advances         Decimal          @default(0) @db.Decimal(14, 2)
+  total            Decimal          @default(0) @db.Decimal(14, 2)
+  status           SettlementStatus @default(DRAFT)
+  approvedAt       DateTime?
+  paidAt           DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  agent       User                   @relation(fields: [agentId], references: [id])
+  commissions Commission[]
+  adjustments SettlementAdjustment[]
+  payable     Payable?
+
+  @@unique([tenantId, code])
+  @@index([tenantId, agentId])
+}
+
+enum AdjustmentKind {
+  BONUS
+  DEDUCTION
+  ADVANCE
+}
+
+model SettlementAdjustment {
+  id           String         @id @default(cuid())
+  tenantId     String
+  settlementId String
+  kind         AdjustmentKind
+  amount       Decimal        @db.Decimal(14, 2)
+  note         String
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, settlementId])
+}
+
+// ====================== FASE 4 ======================
+
+enum TaskType {
+  CALL
+  WHATSAPP
+  EMAIL
+  VISIT
+  FOLLOW_UP
+  DOCUMENT
+  PAYMENT
+  SIGNATURE
+  REVIEW
+  CUSTOM
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING
+  DONE
+}
+
+model Task {
+  id           String       @id @default(cuid())
+  tenantId     String
+  title        String
+  type         TaskType     @default(CUSTOM)
+  priority     TaskPriority @default(MEDIUM)
+  status       TaskStatus   @default(PENDING)
+  dueAt        DateTime?
+  notes        String?      @db.Text
+  assignedToId String
+  createdById  String?
+  // true cuando la creó una automatización, no una persona.
+  automatic    Boolean      @default(false)
+  contactId    String?
+  leadId       String?
+  caseId       String?
+  propertyId   String?
+  completedAt  DateTime?
+  createdAt    DateTime     @default(now())
+
+  assignedTo User @relation(fields: [assignedToId], references: [id])
+
+  @@index([tenantId, assignedToId, status])
+  @@index([tenantId, dueAt])
+}
+
+// Automatizaciones que la empresa enciende o apaga. Sin fila = valor por defecto (encendida).
+model AutomationSetting {
+  id       String  @id @default(cuid())
+  tenantId String
+  key      String  @db.VarChar(40)
+  enabled  Boolean @default(true)
+
+  @@unique([tenantId, key])
+}
+
+// Marca de "ya se ejecutó hoy" para que los avisos diarios no se repitan.
+model AutomationRun {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String   @db.VarChar(40)
+  day       String   @db.VarChar(10)
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, key, day])
+}
+
+// Consumo de IA por empresa: lo usa el límite del plan y el panel de superadmin.
+model AiUsage {
+  id           String   @id @default(cuid())
+  tenantId     String
+  userId       String?
+  feature      String   @db.VarChar(30)
+  provider     String   @db.VarChar(30)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+// ============ Fase 5 ============
+// Dominio propio de una empresa (www.inmobiliariaabc.com).
+model TenantDomain {
+  id          String    @id @default(cuid())
+  tenantId    String
+  domain      String    @unique @db.VarChar(190)
+  verifyToken String    @db.VarChar(64)
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// Clave para la API pública. Solo se guarda su huella; la clave se muestra una vez.
+model ApiKey {
+  id         String    @id @default(cuid())
+  tenantId   String
+  name       String
+  prefix     String    @db.VarChar(16)
+  hash       String    @unique @db.VarChar(64)
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  tenantId  String
+  url       String   @db.VarChar(500)
+  secret    String   @db.VarChar(64)
+  events    Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId])
+}
+
+model WebhookDelivery {
+  id        String   @id @default(cuid())
+  tenantId  String
+  webhookId String
+  event     String   @db.VarChar(40)
+  ok        Boolean
+  status    Int?
+  error     String?
+  createdAt DateTime @default(now())
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, webhookId, createdAt])
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+// Plan de cuentas.
+model Account {
+  id       String      @id @default(cuid())
+  tenantId String
+  code     String      @db.VarChar(12)
+  name     String
+  type     AccountType
+  isSystem Boolean     @default(false)
+
+  lines JournalLine[]
+
+  @@unique([tenantId, code])
+}
+
+// Asiento contable (doble partida). No se edita ni se borra: se revierte con otro asiento.
+model JournalEntry {
+  id          String   @id @default(cuid())
+  tenantId    String
+  number      Int
+  date        DateTime
+  description String
+  currency    String   @db.VarChar(3)
+  // De dónde salió: "transaction" (automático), "transaction_void" o "manual".
+  sourceType  String   @db.VarChar(20)
+  sourceId    String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  lines JournalLine[]
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, sourceType, sourceId])
+  @@index([tenantId, date])
+}
+
+model JournalLine {
+  id        String  @id @default(cuid())
+  tenantId  String
+  entryId   String
+  accountId String
+  debit     Decimal @default(0) @db.Decimal(14, 2)
+  credit    Decimal @default(0) @db.Decimal(14, 2)
+
+  entry   JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id])
+
+  @@index([tenantId, accountId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  VOIDED
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  tenantId      String
+  // Se asigna al emitir; los borradores no consumen numeración.
+  number        Int?
+  date          DateTime
+  customerName  String
+  customerTaxId String        @db.VarChar(30)
+  contactId     String?
+  caseId        String?
+  currency      String        @db.VarChar(3)
+  items         Json
+  total         Decimal       @db.Decimal(14, 2)
+  taxRate       Decimal       @db.Decimal(5, 2)
+  taxAmount     Decimal       @db.Decimal(14, 2)
+  status        InvoiceStatus @default(DRAFT)
+  // Facturación electrónica: código de autorización del fisco cuando haya un proveedor conectado.
+  fiscalStatus  String        @default("NOT_SENT") @db.VarChar(20)
+  fiscalCode    String?
+  voidReason    String?
+  issuedAt      DateTime?
+  createdById   String?
+  createdAt     DateTime      @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status, date])
+}
+
+model BankAccount {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  bank      String?
+  number    String?  @db.VarChar(40)
+  currency  String   @db.VarChar(3)
+  createdAt DateTime @default(now())
+
+  lines BankLine[]
+
+  @@index([tenantId])
+}
+
+// Línea del extracto bancario importado. amount > 0 es abono; < 0 es cargo.
+model BankLine {
+  id            String   @id @default(cuid())
+  tenantId      String
+  bankAccountId String
+  date          DateTime
+  description   String
+  reference     String?  @db.VarChar(80)
+  amount        Decimal  @db.Decimal(14, 2)
+  // Huella para no importar dos veces la misma línea.
+  fingerprint   String   @db.VarChar(64)
+  transactionId String?  @unique
+  createdAt     DateTime @default(now())
+
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([bankAccountId, fingerprint])
+  @@index([tenantId, bankAccountId, date])
+}
+
+// ============ Fase 6: sucursales, legal, impuestos ============
+model Branch {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  city      String?
+  address   String?
+  phone     String?  @db.VarChar(30)
+  createdAt DateTime @default(now())
+
+  users User[]
+
+  @@unique([tenantId, name])
+}
+
+// Tipo de cambio oficial: bolivianos por 1 dólar, vigente desde la fecha indicada.
+model ExchangeRate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  date        DateTime
+  rate        Decimal  @db.Decimal(10, 4)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, date])
+}
+
+// Factura de compra recibida de un proveedor: alimenta el libro de compras IVA.
+model PurchaseInvoice {
+  id            String   @id @default(cuid())
+  tenantId      String
+  date          DateTime
+  supplierTaxId String   @db.VarChar(30)
+  supplierName  String
+  invoiceNumber String   @db.VarChar(30)
+  authCode      String?  @db.VarChar(100)
+  total         Decimal  @db.Decimal(14, 2)
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, date])
+}
+
+// Trámite del proceso legal de una operación.
+model LegalItem {
+  id          String    @id @default(cuid())
+  tenantId    String
+  caseId      String
+  label       String
+  sortOrder   Int       @default(0)
+  doneAt      DateTime?
+  doneById    String?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, caseId])
+}
+
+enum SignatureStatus {
+  PENDING
+  SIGNED
+  CANCELLED
+}
+
+// Firma de un documento por enlace: aceptación electrónica con registro de fecha, IP y huella del archivo.
+model SignatureRequest {
+  id           String          @id @default(cuid())
+  tenantId     String
+  caseId       String
+  documentId   String
+  signerName   String
+  signerRole   String          @db.VarChar(20)
+  token        String          @unique @db.VarChar(64)
+  status       SignatureStatus @default(PENDING)
+  expiresAt    DateTime
+  signedAt     DateTime?
+  signedName   String?
+  signedIp     String?         @db.VarChar(64)
+  signedAgent  String?         @db.VarChar(255)
+  documentHash String?         @db.VarChar(64)
+  createdById  String?
+  createdAt    DateTime        @default(now())
+
+  @@index([tenantId, caseId])
+}
+
+// Cierre de gestión contable: el año queda cerrado y no admite movimientos con fechas de ese periodo.
+model AccountingClosing {
+  id          String   @id @default(cuid())
+  tenantId    String
+  year        Int
+  currency    String   @db.VarChar(3)
+  entryId     String?
+  result      Decimal  @db.Decimal(14, 2)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, year, currency])
+}

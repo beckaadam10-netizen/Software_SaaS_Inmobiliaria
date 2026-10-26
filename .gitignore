@@ -1,0 +1,12 @@
+node_modules
+dist
+.next
+.env
+.env.local
+*.tsbuildinfo
+apps/api/src/generated
+apps/api/uploads
+
+# Locales
+.claude/
+apps/web/AGENTS.md

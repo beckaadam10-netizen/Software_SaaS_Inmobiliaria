@@ -1,0 +1,13 @@
+{
+  "name": "soft-inmo",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:api": "pnpm --dir apps/api dev",
+    "dev:web": "pnpm --dir apps/web dev",
+    "db:migrate": "pnpm --dir apps/api db:migrate",
+    "db:seed": "pnpm --dir apps/api db:seed",
+    "db:studio": "pnpm --dir apps/api db:studio",
+    "test": "pnpm --dir apps/api test"
+  }
+}

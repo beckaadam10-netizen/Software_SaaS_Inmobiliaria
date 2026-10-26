@@ -1,0 +1,121 @@
+@import "tailwindcss";
+@import "@fontsource-variable/manrope/wght.css";
+
+/* Paleta de marca de Soft_Inmo */
+@theme {
+  --color-brand-deep: #0b3c49;
+  --color-brand-teal: #0f766e;
+  --color-accent-lime: #a3e635;
+  --color-surface: #f1faf7;
+  --color-ink: #1f2933;
+  --color-white: #ffffff;
+  /* Texto sobre los fondos de marca y sobre el lima: no cambian con el tema. */
+  --color-on-brand: #f1faf7;
+  --color-on-accent: #1f2933;
+  --color-lime-soft: #d6f4a4;
+  /* Enlaces y títulos de marca (en claro siguen los colores de la empresa). */
+  --color-link: var(--color-brand-teal);
+  --color-brand-ink: var(--color-brand-deep);
+
+  /* Colores de estado: siempre con texto o icono, nunca solos. */
+  --color-success: #166534;
+  --color-success-soft: #dcfce7;
+  --color-warning: #92400e;
+  --color-warning-soft: #fef3c7;
+  --color-danger: #991b1b;
+  --color-danger-soft: #fee2e2;
+  --color-info: #075985;
+  --color-info-soft: #e0f2fe;
+
+  /* Tipografía de Soft_Inmo: Manrope, legible en tablas y con carácter en los títulos. */
+  --font-sans: "Manrope Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Manrope Variable", system-ui, sans-serif;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Los elementos de una grilla pueden encogerse: evita desbordes con textos largos en celular. */
+.grid > * {
+  min-width: 0;
+}
+
+/* Títulos un poco más compactos que el texto corrido. */
+h1, h2 {
+  letter-spacing: -0.015em;
+}
+/* Los números de tablas y tarjetas se alinean. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Los colores de una empresa (estilo en línea) también tiñen sus enlaces y títulos. */
+.brand-scope {
+  --color-link: var(--color-brand-teal);
+  --color-brand-ink: var(--color-brand-deep);
+}
+
+/* ---------- Tema oscuro ----------
+   Sigue al sistema salvo que la persona elija "claro" u "oscuro" (atributo data-theme en <html>). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-surface: #0c1a1f;
+    --color-ink: #e3ece9;
+    --color-white: #132a31;
+    --color-brand-deep: #082a33;
+    --color-lime-soft: #2d4a10;
+    --color-success: #86efac;
+    --color-success-soft: #12341f;
+    --color-warning: #fcd34d;
+    --color-warning-soft: #3a2c08;
+    --color-danger: #fca5a5;
+    --color-danger-soft: #3f1717;
+    --color-info: #7dd3fc;
+    --color-info-soft: #0b2f45;
+    color-scheme: dark;
+  }
+  :root:not([data-theme="light"]), :root:not([data-theme="light"]) .brand-scope {
+    --color-link: #5fd4c0;
+    --color-brand-ink: #86dccb;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --color-surface: #0c1a1f;
+  --color-ink: #e3ece9;
+  --color-white: #132a31;
+  --color-brand-deep: #082a33;
+  --color-lime-soft: #2d4a10;
+  --color-success: #86efac;
+  --color-success-soft: #12341f;
+  --color-warning: #fcd34d;
+  --color-warning-soft: #3a2c08;
+  --color-danger: #fca5a5;
+  --color-danger-soft: #3f1717;
+  --color-info: #7dd3fc;
+  --color-info-soft: #0b2f45;
+  color-scheme: dark;
+}
+:root[data-theme="dark"], :root[data-theme="dark"] .brand-scope {
+  --color-link: #5fd4c0;
+  --color-brand-ink: #86dccb;
+  color-scheme: dark;
+}
+
+/* En oscuro el mapa se atenúa para no encandilar. */
+:root[data-theme="dark"] .leaflet-tile-pane { filter: brightness(0.8) contrast(1.1); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .leaflet-tile-pane { filter: brightness(0.8) contrast(1.1); }
+}
+
+/* Palabra que rota en el título del portal. */
+@keyframes portal-word {
+  from { opacity: 0; transform: translateY(35%); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
